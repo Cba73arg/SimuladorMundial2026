@@ -3,7 +3,7 @@
 
 :root{
   /* Cambiá esta URL por la imagen de dorso de carta que quieras */
-  --card-back-url: url('https://i.imgur.com/jqk4F3z.png');
+  --card-back-url: url('https://github.com/Cba73arg/SimuladorMundial2026/blob/main/FondoCarta.png');
   /* Fondo estadio — cambiá por tu propia imagen si preferís */
   --stadium-bg: url('https://i.imgur.com/Vr7CfYQ.jpg');
 }
