@@ -1,4 +1,8 @@
-/* manual.js - versión corregida y funcional */
+/* manual.js - versión final corregida:
+   - banderas como imágenes (archivo: "<CountryName>.png" en el mismo nivel)
+   - reinicio arreglado (hosts en A,B,D)
+   - mantiene reglas B1/B4 y restricciones por confederaciones
+*/
 
 /* ---------- Datos iniciales ---------- */
 const ordenGrupos = ["A","B","C","D","E","F","G","H","I","J","K","L"];
@@ -28,17 +32,7 @@ const confederacion = {
   "R INT 1": null, "R INT 2": null
 };
 
-/* Banderas */
-const bandera = {
-  "México":"🇲🇽","Canadá":"🇨🇦","Estados Unidos":"🇺🇸",
-  "España":"🇪🇸","Argentina":"🇦🇷","Francia":"🇫🇷","Inglaterra":"🏴","Brasil":"🇧🇷","Portugal":"🇵🇹","Países Bajos":"🇳🇱","Bélgica":"🇧🇪","Alemania":"🇩🇪",
-  "Australia":"🇦🇺","Austria":"🇦🇹","Colombia":"🇨🇴","Corea del Sur":"🇰🇷","Croacia":"🇭🇷","Ecuador":"🇪🇨","Irán":"🇮🇷","Japón":"🇯🇵","Marruecos":"🇲🇦","Senegal":"🇸🇳","Suiza":"🇨🇭","Uruguay":"🇺🇾",
-  "Arabia Saudita":"🇸🇦","Argelia":"🇩🇿","Costa de Marfil":"🇨🇮","Egipto":"🇪🇬","Escocia":"🏴","Noruega":"🇳🇴","Panamá":"🇵🇦","Paraguay":"🇵🇾","Qatar":"🇶🇦","Sudáfrica":"🇿🇦","Túnez":"🇹🇳","Uzbekistán":"🇺🇿",
-  "Jordania":"🇯🇴","Cabo Verde":"🇨🇻","Ghana":"🇬🇭","Curazao":"🇨🇼","Haití":"🇭🇹","Nueva Zelanda":"🇳🇿",
-  "R EUR 1":"🏳️","R EUR 2":"🏳️","R EUR 3":"🏳️","R EUR 4":"🏳️","R INT 1":"🏳️","R INT 2":"🏳️"
-};
-
-/* Ubicación inicial de equipos */
+/* Ubicación inicial de equipos (origen bombo) */
 const ubicadoDesde = {};
 ["México","Canadá","Estados Unidos"].forEach(h=> ubicadoDesde[h]=0);
 
@@ -59,12 +53,18 @@ function mezclar(arr) {
 
 function actualizarLog(msg) {
   const l = document.getElementById("log");
+  if (!l) return;
   const ts = new Date().toLocaleTimeString();
   l.innerHTML = `<div>[${ts}] ${msg}</div>` + l.innerHTML;
 }
 
-function getBandera(team) {
-  return bandera[team] || "🏳️";
+/* Devuelve HTML de la imagen de la bandera (archivo: "<CountryName>.png" en mismo nivel).
+   Usamos encodeURIComponent para permitir espacios y acentos en nombres de archivo. */
+function getFlagImgHtml(team, size = 22) {
+  // Nombre del archivo = team + ".png", codificado
+  const filename = encodeURIComponent(team) + ".png";
+  // Si no existe la imagen en el servidor se verá como imagen rota; asume que subiste los PNG con esos nombres.
+  return `<img src="./${filename}" alt="${team}" class="flag-img" style="width:${size}px;height:auto;object-fit:cover;border-radius:2px;">`;
 }
 
 /* ---------- validaciones ---------- */
@@ -145,6 +145,7 @@ function asignarEquipo(team, bomboNumber, isUltimoDelBombo=false) {
           return false;
         }
         const bloqueArr = bloque1.includes(grupoPrimerEspecial) ? bloque2 : bloque1;
+        // buscar grupo vacío en bloque opuesto
         let gLibre = null;
         for (let gx of bloqueArr) {
           if (grupos[gx].length === 0 && puedeColocarEnGrupoExtendido(team, gx, 1)) { gLibre = gx; break; }
@@ -155,7 +156,7 @@ function asignarEquipo(team, bomboNumber, isUltimoDelBombo=false) {
           actualizarLog(`${team} (B1) asignado al Grupo ${gLibre} (bloque opuesto libre)`);
           return true;
         }
-        // desplazar ocupante
+        // desplazar ocupante (no host, no España/Argentina)
         let gOcupado = null;
         for (let gx of bloqueArr) {
           if (grupos[gx].length > 0) {
@@ -184,6 +185,7 @@ function asignarEquipo(team, bomboNumber, isUltimoDelBombo=false) {
         return false;
       }
     } else {
+      // resto B1: primer grupo completamente vacío
       const g = primerGrupoCompletamenteVacio();
       if (g) { grupos[g].push(team); ubicadoDesde[team]=1; actualizarLog(`${team} (B1) -> Grupo ${g}`); return true; }
       actualizarLog(`No hay grupo vacío para ${team} (B1).`);
@@ -200,6 +202,7 @@ function asignarEquipo(team, bomboNumber, isUltimoDelBombo=false) {
     return true;
   }
 
+  // último del bombo 4: intentar intercambio dentro B4
   if (isUltimoDelBombo && bomboNumber === 4) {
     const okSwap = intentarIntercambioSoloBombo4(team);
     if (okSwap) { ubicadoDesde[team] = 4; actualizarLog(`${team} (B4 último) colocado via intercambio B4`); return true; }
@@ -253,7 +256,7 @@ function grupoValidoConLista(listaMiembros) {
     if (c) {
       cnt[c] = (cnt[c]||0)+1;
       if (c==="UEFA") uefa++;
-      else if (cnt[c]>1) return false;
+      if (c!=="UEFA" && cnt[c]>1) return false;
       if (c==="UEFA" && uefa>2) return false;
     }
     const b = ubicadoDesde[m] || 0;
@@ -284,16 +287,17 @@ function renderGrupos() {
       if (!equipo){
         divSlot.innerHTML = `<div style="opacity:0.55">—</div><div class="origin">—</div>`;
       } else {
-        const flag = getBandera(equipo);
+        const flagHtml = getFlagImgHtml(equipo, 22);
         const origin = (ubicadoDesde[equipo]===0)?"Host":`B${ubicadoDesde[equipo]}`;
-        divSlot.innerHTML = `<div style="display:flex;align-items:center;gap:8px;"><span class="flag">${flag}</span>${equipo}</div><div class="origin ${claseConf(confederacion[equipo])}">${origin}</div>`;
+        divSlot.innerHTML = `<div style="display:flex;align-items:center;gap:8px;">${flagHtml}<div>${equipo}</div></div><div class="origin ${claseConf(confederacion[equipo])}">${origin}</div>`;
         if (HOSTS.includes(equipo)) divSlot.classList.add("host");
       }
       box.appendChild(divSlot);
     }
     cont.appendChild(box);
   });
-  document.getElementById("tituloBombo").innerText = `Bombo ${bomboActual}`;
+  const titulo = document.getElementById("tituloBombo");
+  if (titulo) titulo.innerText = `Bombo ${bomboActual}`;
 }
 
 function arrayBombo(n) {
@@ -314,6 +318,8 @@ function renderCartas() {
     card.className="card";
     card.setAttribute("data-team",team);
     card.title="Haz click para revelar";
+    // al principio la carta muestra el dorso (imagen en CSS: --card-back-url)
+    card.innerHTML = ""; // dorso queda por CSS
     card.addEventListener("click",()=>{if(!card.classList.contains("revealed")) revelarCarta(card)});
     cont.appendChild(card);
   });
@@ -321,9 +327,10 @@ function renderCartas() {
 
 function revelarCarta(cardEl){
   const team = cardEl.getAttribute("data-team");
-  const flag = getBandera(team);
+  if (!team) return;
+  const flagHtml = getFlagImgHtml(team, 28);
   cardEl.classList.add("revealed");
-  cardEl.innerHTML=`<div class="flag">${flag}</div><div class="name">${team}</div>`;
+  cardEl.innerHTML = `<div class="flag">${flagHtml}</div><div class="name">${team}</div>`;
   const arr = arrayBombo(bomboActual);
   const isUltimo = arr.length===1;
   setTimeout(()=>{
@@ -341,8 +348,10 @@ function avanzarBombo(){
   bomboActual++;
   if(bomboActual>4){
     actualizarLog("🎉 Sorteo finalizado");
-    document.getElementById("tituloBombo").innerText="Sorteo completado";
-    document.getElementById("cardContainer").innerHTML="";
+    const titulo = document.getElementById("tituloBombo");
+    if (titulo) titulo.innerText="Sorteo completado";
+    const cont = document.getElementById("cardContainer");
+    if (cont) cont.innerHTML="";
     return;
   }
   actualizarLog(`➡️ Comienza Bombo ${bomboActual}`);
@@ -351,15 +360,32 @@ function avanzarBombo(){
 
 /* ---------- Reinicio ---------- */
 function reiniciarTodo(){
-  bomboActual=1;
-  primerEspecial=null;
-  grupoPrimerEspecial=null;
-  for (let g in grupos) grupos[g]=[];
-  HOSTS.forEach(h=>{grupos[ordenGrupos[0]].push(h); ubicadoDesde[h]=0});
+  // reset estado
+  bomboActual = 1;
+  primerEspecial = null;
+  grupoPrimerEspecial = null;
+
+  // vaciar grupos
+  for (let g of ordenGrupos) grupos[g] = [];
+
+  // colocar hosts en sus grupos fijas: A: México, B: Canadá, D: Estados Unidos
+  grupos["A"].push("México");
+  grupos["B"].push("Canadá");
+  grupos["D"].push("Estados Unidos");
+
+  // reset ubicadoDesde completamente
+  for (let k in ubicadoDesde) delete ubicadoDesde[k];
+  ubicadoDesde["México"] = 0;
+  ubicadoDesde["Canadá"] = 0;
+  ubicadoDesde["Estados Unidos"] = 0;
+
+  // restaurar bombos
   bombo1 = ["España","Argentina","Francia","Inglaterra","Brasil","Portugal","Países Bajos","Bélgica","Alemania"];
   bombo2 = ["Australia","Austria","Colombia","Corea del Sur","Croacia","Ecuador","Irán","Japón","Marruecos","Senegal","Suiza","Uruguay"];
   bombo3 = ["Arabia Saudita","Argelia","Costa de Marfil","Egipto","Escocia","Noruega","Panamá","Paraguay","Qatar","Sudáfrica","Túnez","Uzbekistán"];
   bombo4 = ["Jordania","Cabo Verde","Ghana","Curazao","Haití","Nueva Zelanda","R EUR 1","R EUR 2","R EUR 3","R EUR 4","R INT 1","R INT 2"];
+
+  // render inicial
   renderGrupos();
   renderCartas();
   actualizarLog("🔄 Reinicio completo");
@@ -367,6 +393,9 @@ function reiniciarTodo(){
 
 /* ---------- Init ---------- */
 document.addEventListener("DOMContentLoaded",()=>{
+  // iniciar
   reiniciarTodo();
-  document.getElementById("btnReiniciar").addEventListener("click",reiniciarTodo);
+  // listener reinicio (usa id="reiniciar" como tu HTML)
+  const btn = document.getElementById("reiniciar");
+  if (btn) btn.addEventListener("click", reiniciarTodo);
 });
