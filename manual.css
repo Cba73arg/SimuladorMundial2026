@@ -1,97 +1,144 @@
-/* Reset básico */
+/* manual.css - estilo independiente para el modo manual */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
 body {
-    margin: 0;
-    padding: 0;
-    background: #0a0f24;
-    font-family: 'Segoe UI', Arial, sans-serif;
-    color: white;
-    overflow-x: hidden;
+  font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+  background: linear-gradient(180deg,#071226 0%, #0b2433 100%);
+  color: #eaf7ff;
+  min-height: 100vh;
 }
 
+.top {
+  padding: 18px;
+  text-align: center;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.title { font-size: 20px; font-weight: 800; color: #ffd54f; }
+.subtitle { font-size: 13px; margin-top:6px; color:#cfeefb; }
+
+/* Layout */
 .container {
-    display: flex;
-    height: 100vh;
+  display: flex;
+  gap: 18px;
+  padding: 18px;
 }
 
-/* Panel izquierdo */
+/* Left column */
 .left {
-    width: 50%;
-    padding: 20px;
-    border-right: 2px solid rgba(255,255,255,0.15);
+  width: 44%;
+  background: rgba(255,255,255,0.02);
+  border-radius: 10px;
+  padding: 14px;
+  min-height: 72vh;
 }
-
-.left h2 {
-    text-align: center;
-    margin-bottom: 20px;
+.controls { display:flex; gap:8px; justify-content:center; margin-bottom:12px; }
+.controls button {
+  background:#0077c2; color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:700;
 }
+.controls button:active { transform: translateY(1px); }
 
-/* Cartas */
 .cards {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 15px;
-    justify-content: center;
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
+  justify-content:center;
+  min-height:220px;
+  padding:10px;
 }
 
+/* Carta (boca abajo y revelada) */
 .card {
-    width: 120px;
-    height: 160px;
-    background: url('https://i.imgur.com/jqk4F3z.png'); /* dorso */
-    background-size: cover;
-    border-radius: 10px;
-    cursor: pointer;
-    position: relative;
-    transition: transform 0.25s;
+  width:120px;
+  height:72px;
+  border-radius:8px;
+  background: linear-gradient(180deg,#0b3b5c,#05283b);
+  box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:800;
+  color:#d9f6ff;
+  cursor:pointer;
+  transition: transform .18s ease, box-shadow .18s ease;
+  user-select:none;
 }
-
-.card:hover {
-    transform: scale(1.07);
-}
-
+.card:hover { transform: translateY(-6px) scale(1.02); }
 .card.revealed {
-    background: #1c233a;
-    border: 2px solid white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    text-align: center;
-    padding: 10px;
+  background: linear-gradient(180deg,#ffd54f,#ffb74d);
+  color:#06202a;
 }
 
-/* Panel derecho: grupos */
+/* Bitácora */
+.logWrap { margin-top: 14px; }
+.logWrap h4 { margin-bottom: 8px; color:#ffd54f; text-align:center; }
+.log {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(0,0,0,0.2);
+  font-size: 13px;
+}
+
+/* Right column (grupos) */
 .right {
-    width: 50%;
-    padding: 20px;
-}
-
-.right h2 {
-    text-align: center;
+  width: 56%;
+  padding: 14px;
+  background: rgba(255,255,255,0.015);
+  border-radius: 10px;
+  min-height: 72vh;
 }
 
 .groups-container {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-    margin-top: 20px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-top: 8px;
 }
 
+/* Cada grupo: hasta 4 slots (B1..B4) */
 .group {
-    background: #10172b;
-    border: 2px solid #243056;
-    border-radius: 8px;
-    padding: 12px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+  border-radius:8px;
+  padding:8px;
+  border:1px solid rgba(255,255,255,0.03);
+  min-height: 120px;
+}
+.group h4 { margin-bottom:8px; color:#ffd54f; text-align:center; }
+.slot {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:8px;
+  margin:6px 0;
+  padding:6px 8px;
+  border-radius:6px;
+  background: rgba(255,255,255,0.02);
+  font-weight:700;
+}
+.slot .origin {
+  font-size:11px;
+  padding:3px 6px;
+  border-radius:4px;
+  background: rgba(0,0,0,0.25);
+  color:#dfefff;
 }
 
-.group h3 {
-    margin: 0 0 10px 0;
-    text-align: center;
-}
+/* diferentes colores por confederación (solo visual) */
+.conf-UEFA { background:#0d3b66; color:#dff1ff; }
+.conf-CONMEBOL { background:#3b7a57; color:#fff7e6; }
+.conf-AFC { background:#7a4b9a; color:#fff; }
+.conf-AFC.light { background:#8f5fb7; }
+.conf-CAF { background:#945a2b; color:#fff8e6; }
+.conf-CONCACAF { background:#2b7a36; color:#fff; }
+.conf-OFC { background:#2b5b7a; color:#fff; }
 
-.group .team {
-    background: #1c2544;
-    margin: 4px 0;
-    padding: 6px;
-    border-radius: 4px;
-    text-align: center;
+/* host highlight */
+.slot.host { background:#2b7a36; color:white; }
+
+/* responsive */
+@media (max-width: 980px) {
+  .container { flex-direction: column; padding:12px; }
+  .left, .right { width:100%; }
+  .groups-container { grid-template-columns: repeat(2,1fr); }
 }
