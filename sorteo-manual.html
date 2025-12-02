@@ -1,23 +1,40 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
+    <meta charset="UTF-8" />
     <title>Sorteo Manual – Simulador Mundial 2026</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
     <link rel="stylesheet" href="manual.css">
 </head>
 <body>
 
+<div class="top">
+  <div class="title">Simulador Mundial 2026 — Modo Manual</div>
+  <div class="subtitle" id="tituloBombo">Bombo 1</div>
+</div>
+
 <div class="container">
 
-    <!-- Panel izquierdo: cartas -->
+    <!-- Panel izquierdo: controles + cartas + bitácora -->
     <section class="left">
-        <h2>Bombo 1</h2>
+        <div class="controls">
+            <button id="reiniciar">Reiniciar</button>
+            <button id="btnSiguiente" style="display:none;">Empezar Bombo 2</button>
+            <button id="btnSiguiente3" style="display:none;">Empezar Bombo 3</button>
+            <button id="btnSiguiente4" style="display:none;">Empezar Bombo 4</button>
+        </div>
+
         <div id="cardContainer" class="cards"></div>
+
+        <div class="logWrap">
+          <h4>Bitácora</h4>
+          <div id="log" class="log"></div>
+        </div>
     </section>
 
-    <!-- Panel derecho: grupos A–L -->
+    <!-- Panel derecho: grupos A–L (4 slots por grupo) -->
     <section class="right">
-        <h2>Grupos</h2>
+        <h3>Grupos (A - L)</h3>
         <div class="groups-container" id="groupsContainer"></div>
     </section>
 
@@ -26,3 +43,4 @@
 <script src="manual.js"></script>
 </body>
 </html>
+
