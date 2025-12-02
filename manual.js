@@ -462,4 +462,111 @@ function reiniciarTodo() {
   actualizarLog("Reiniciado.");
   renderGrupos();
   renderCartas();
+
+  /* ========== RENDER DE UI ========== */
+
+function renderGrupos() {
+    const cont = document.getElementById("groupsContainer");
+    cont.innerHTML = "";
+
+    ordenGrupos.forEach(g => {
+        const box = document.createElement("div");
+        box.className = "groupBox";
+        box.innerHTML = `<h4>Grupo ${g}</h4>`;
+
+        const lista = document.createElement("div");
+        lista.className = "groupList";
+
+        grupos[g].forEach(t => {
+            const item = document.createElement("div");
+            item.className = "groupItem";
+            item.innerHTML = `${getBandera(t)} ${t}`;
+            lista.appendChild(item);
+        });
+
+        box.appendChild(lista);
+        cont.appendChild(box);
+    });
+}
+
+function crearCartasDelBombo() {
+    const cardContainer = document.getElementById("cardContainer");
+    cardContainer.innerHTML = "";
+
+    let bombo =
+        bomboActual === 1 ? bombo1 :
+        bomboActual === 2 ? bombo2 :
+        bomboActual === 3 ? bombo3 :
+        bombo4;
+
+    bombo.forEach(team => {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `<div class="flag">${getBandera(team)}</div>
+                          <div class="name">${team}</div>`;
+
+        card.onclick = () => seleccionarEquipo(team);
+
+        cardContainer.appendChild(card);
+    });
+
+    document.getElementById("tituloBombo").innerText = `Bombo ${bomboActual}`;
+}
+
+function seleccionarEquipo(team) {
+    let bombo =
+        bomboActual === 1 ? bombo1 :
+        bomboActual === 2 ? bombo2 :
+        bomboActual === 3 ? bombo3 :
+        bombo4;
+
+    const esUltimo = (bombo.length === 1);
+
+    const ok = asignarEquipo(team, bomboActual, esUltimo);
+    if (!ok) {
+        actualizarLog(`❌ No se pudo colocar a ${team}`);
+        return;
+    }
+
+    // Sacarlo del bombo
+    const idx = bombo.indexOf(team);
+    if (idx !== -1) bombo.splice(idx, 1);
+
+    crearCartasDelBombo();
+    renderGrupos();
+
+    // Si el bombo terminó → pasar al siguiente
+    if (bombo.length === 0) avanzarBombo();
+}
+
+function avanzarBombo() {
+    bomboActual++;
+    if (bomboActual > 4) {
+        actualizarLog("🎉 Sorteo finalizado");
+        document.getElementById("tituloBombo").innerText = "Sorteo completado";
+        document.getElementById("cardContainer").innerHTML = "";
+        return;
+    }
+
+    actualizarLog(`➡️ Comienza Bombo ${bomboActual}`);
+    crearCartasDelBombo();
+}
+
+function reiniciarTodo() {
+    location.reload();
+}
+
+/* ========== INICIO AUTOMÁTICO DE LA PÁGINA ========== */
+window.onload = () => {
+    mezclar(bombo1);
+    mezclar(bombo2);
+    mezclar(bombo3);
+    mezclar(bombo4);
+
+    crearCartasDelBombo();
+    renderGrupos();
+
+    document.getElementById("reiniciar").onclick = reiniciarTodo;
+};
+
 }
