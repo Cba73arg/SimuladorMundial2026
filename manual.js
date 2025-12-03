@@ -1,7 +1,11 @@
-/* manual.js - versión final corregida:
-   - banderas como imágenes (archivo: "<CountryName>.png" en el mismo nivel)
-   - reinicio arreglado (hosts en A,B,D)
-   - mantiene reglas B1/B4 y restricciones por confederaciones
+/* manual.js - versión final corregida y extendida
+   Cambios principales (solo lo esencial):
+   1) Regla TOP4 actualizada: España, Argentina, Francia, Inglaterra (bloques y subbloques)
+   2) Fallback: si un equipo NO puede asignarse automáticamente, intentar intercambio
+      con otro equipo DEL MISMO BOMBO (respetando restricciones para ambos grupos)
+   3) Al finalizar sorteo muestra UI para "Compartir" (usa html2canvas cuando esté disponible
+      y navigator.share si el navegador lo soporta)
+   Mantuve la lógica original intacta en lo posible y añadí comentarios donde interviné.
 */
 
 /* ---------- Datos iniciales ---------- */
@@ -36,9 +40,9 @@ const confederacion = {
 const ubicadoDesde = {};
 ["México","Canadá","Estados Unidos"].forEach(h=> ubicadoDesde[h]=0);
 
-/* Estado B1 (España/Argentina) */
-let primerEspecial = null;
-let grupoPrimerEspecial = null;
+/* Estado TOP4 (España, Argentina, Francia, Inglaterra) */
+const TOP4 = ["España","Argentina","Francia","Inglaterra"];
+let top4Order = []; // registros en orden de salida: {team, group, block, sub}
 
 /* bombo actual */
 let bomboActual = 1;
@@ -58,12 +62,9 @@ function actualizarLog(msg) {
   l.innerHTML = `<div>[${ts}] ${msg}</div>` + l.innerHTML;
 }
 
-/* Devuelve HTML de la imagen de la bandera (archivo: "<CountryName>.png" en mismo nivel).
-   Usamos encodeURIComponent para permitir espacios y acentos en nombres de archivo. */
+/* Devuelve HTML de la imagen de la bandera (archivo: "<CountryName>.png" en el mismo nivel). */
 function getFlagImgHtml(team, size = 22) {
-  // Nombre del archivo = team + ".png", codificado
   const filename = encodeURIComponent(team) + ".png";
-  // Si no existe la imagen en el servidor se verá como imagen rota; asume que subiste los PNG con esos nombres.
   return `<img src="./${filename}" alt="${team}" class="flag-img" style="width:${size}px;height:auto;object-fit:cover;border-radius:2px;">`;
 }
 
@@ -123,96 +124,215 @@ function obtenerGrupoOpuestoPara(grupo) {
   return null;
 }
 
-/* ---------- asignar equipo ---------- */
-function asignarEquipo(team, bomboNumber, isUltimoDelBombo=false) {
-  // BOMBO 1 - regla España/Argentina
-  if (bomboNumber === 1) {
-    if (team === "España" || team === "Argentina") {
-      if (!primerEspecial) {
-        const g = primerGrupoCompletamenteVacio();
-        if (!g) { actualizarLog(`No hay grupo vacío para ${team}`); return false; }
-        grupos[g].push(team);
-        ubicadoDesde[team] = 1;
-        primerEspecial = team;
-        grupoPrimerEspecial = g;
-        actualizarLog(`${team} (B1) asignado al Grupo ${g} (primer del par)`);
-        return true;
-      } else {
-        const bloqueOpuesto = obtenerGrupoOpuestoPara(grupoPrimerEspecial);
-        if (!bloqueOpuesto) {
-          const fallback = primerGrupoValidoPara(team, 1);
-          if (fallback) { grupos[fallback].push(team); ubicadoDesde[team]=1; actualizarLog(`${team} (B1 fallback) -> ${fallback}`); return true; }
-          return false;
-        }
-        const bloqueArr = bloque1.includes(grupoPrimerEspecial) ? bloque2 : bloque1;
-        // buscar grupo vacío en bloque opuesto
-        let gLibre = null;
-        for (let gx of bloqueArr) {
-          if (grupos[gx].length === 0 && puedeColocarEnGrupoExtendido(team, gx, 1)) { gLibre = gx; break; }
-        }
-        if (gLibre) {
-          grupos[gLibre].push(team);
-          ubicadoDesde[team] = 1;
-          actualizarLog(`${team} (B1) asignado al Grupo ${gLibre} (bloque opuesto libre)`);
-          return true;
-        }
-        // desplazar ocupante (no host, no España/Argentina)
-        let gOcupado = null;
-        for (let gx of bloqueArr) {
-          if (grupos[gx].length > 0) {
-            const ocupante = grupos[gx][0];
-            if (!HOSTS.includes(ocupante) && ocupante !== "España" && ocupante !== "Argentina") { gOcupado = gx; break; }
-          }
-        }
-        if (gOcupado) {
-          const ocupante = grupos[gOcupado][0];
-          const bomboDelOcupante = ubicadoDesde[ocupante] || 1;
-          const destParaOcupante = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [gOcupado]);
-          if (destParaOcupante) {
-            grupos[gOcupado].splice(0,1);
-            grupos[gOcupado].push(team);
-            grupos[destParaOcupante].push(ocupante);
-            ubicadoDesde[team] = 1;
-            actualizarLog(`Desplazamiento B1: ${team} -> Grupo ${gOcupado}; ${ocupante} -> Grupo ${destParaOcupante}`);
-            return true;
-          } else {
-            actualizarLog(`No se encontró ubicación válida para desplazar ${ocupante}.`);
-            return false;
-          }
-        }
-        const fallback = primerGrupoValidoPara(team, 1);
-        if (fallback) { grupos[fallback].push(team); ubicadoDesde[team]=1; actualizarLog(`${team} (B1 fallback2) -> ${fallback}`); return true; }
-        return false;
+/* ---------- Nuevas utilidades para BLOQUES / SUBBLOQUES (TOP4) ---------- */
+/* Subbloques:
+   BLOQUE 1: SUBA: E,I,F   SUBB: H,G
+   BLOQUE 2: SUBA: C,L     SUBB: J,K
+*/
+const SUBS = {
+  "1A": ["E","I","F"],
+  "1B": ["H","G"],
+  "2A": ["C","L"],
+  "2B": ["J","K"]
+};
+
+function grupoABloqueSub(grupo) {
+  // retorna {block:1|2, sub:'A'|'B'} o null
+  if (SUBS["1A"].includes(grupo)) return {block:1, sub:"A"};
+  if (SUBS["1B"].includes(grupo)) return {block:1, sub:"B"};
+  if (SUBS["2A"].includes(grupo)) return {block:2, sub:"A"};
+  if (SUBS["2B"].includes(grupo)) return {block:2, sub:"B"};
+  return null;
+}
+function bloqueOpuesto(block) { return block === 1 ? 2 : 1; }
+function subOpuesto(sub) { return sub === "A" ? "B" : "A"; }
+function subKey(block, sub) { return `${block}${sub}`; }
+
+/* Busca primer grupo disponible dentro de bloque-sub */
+function primerGrupoDisponibleEnBloqueSub(block, sub, bomboNumber, preferEmpty=true) {
+  const arr = SUBS[subKey(block, sub)];
+  // priorizar vacíos si preferEmpty
+  if (preferEmpty) {
+    for (let g of arr) {
+      if (grupos[g].length === 0 && puedeColocarEnGrupoExtendido(arr.length>0?arr[0]:"", g, bomboNumber) === undefined) {
+        // skip silly guard
       }
-    } else {
-      // resto B1: primer grupo completamente vacío
-      const g = primerGrupoCompletamenteVacio();
-      if (g) { grupos[g].push(team); ubicadoDesde[team]=1; actualizarLog(`${team} (B1) -> Grupo ${g}`); return true; }
-      actualizarLog(`No hay grupo vacío para ${team} (B1).`);
-      return false;
+    }
+    // real loop respecting bombo/constraints
+    for (let g of arr) {
+      if (grupos[g].length === 0 && puedeColocarEnGrupoExtendidoPlaceholder(g, bomboNumber)) {
+        // we must check team later; this function only returns groups - we'll check validity when trying to place a specific team
+      }
     }
   }
-
-  // BOMBO 2/3/4
-  const gValido = primerGrupoValidoPara(team, bomboNumber);
-  if (gValido) {
-    grupos[gValido].push(team);
-    ubicadoDesde[team] = bomboNumber;
-    actualizarLog(`${team} (B${bomboNumber}) -> Grupo ${gValido}`);
-    return true;
-  }
-
-  // último del bombo 4: intentar intercambio dentro B4
-  if (isUltimoDelBombo && bomboNumber === 4) {
-    const okSwap = intentarIntercambioSoloBombo4(team);
-    if (okSwap) { ubicadoDesde[team] = 4; actualizarLog(`${team} (B4 último) colocado via intercambio B4`); return true; }
-  }
-
-  actualizarLog(`${team} (B${bomboNumber}) no pudo asignarse automáticamente.`);
-  return false;
+  // For simplicity this helper will just return array groups (we'll filter when assigning)
+  return arr.slice();
 }
 
-/* ---------- Intercambio B4 ---------- */
+// helper that returns whether a specific team can be placed into group (wrap of can)
+function puedeColocar(team, g, bomboNumber) { return puedeColocarEnGrupoExtendido(team, g, bomboNumber); }
+
+/* ---------- asignar TOP4 (reemplaza la regla previa España/Argentina) ---------- */
+/*
+ Logic:
+ - Maintain top4Order array recording placed top4 in order with their assigned group and block/sub.
+ - When first of top4 appears -> place in first completely empty group (as before) and record block/sub.
+ - Second -> must go to opposite block, SAME sub as first (i.e., opposite block same subblock). Place in first valid group in that block-sub.
+ - Third -> must go to SAME block as first, OPPOSITE sub (i.e., subB if first in subA). Place in first valid group in that block-sub.
+ - Fourth -> must go to OPPOSITE block of third and SAME sub as third (i.e., completes pairing).
+ - For each placement: try to find empty group in target block-sub that accepts the team; if none exist, try to displace a non-host occupant in that block-sub (move that occupant to primerGrupoValidoExcluyendo); if still not possible, fallback to global primerGrupoValidoPara.
+*/
+function asignarTop4(team, bomboNumber) {
+  // team must be in TOP4
+  const n = top4Order.length; // how many already placed (0..3)
+  if (n === 0) {
+    // place first in first completely empty group
+    const g = primerGrupoCompletamenteVacio();
+    if (!g) { actualizarLog(`No hay grupo vacío para ${team} (TOP4 primer).`); return false; }
+    grupos[g].push(team); ubicadoDesde[team] = bomboNumber;
+    const bs = grupoABloqueSub(g);
+    top4Order.push({team, group:g, block: bs.block, sub:bs.sub});
+    actualizarLog(`${team} (TOP4) asignado como primer del TOP4 en Grupo ${g} (Bloque ${bs.block} Sub ${bs.sub})`);
+    return true;
+  } else if (n === 1) {
+    // second -> opposite block, same sub
+    const first = top4Order[0];
+    const targetBlock = bloqueOpuesto(first.block);
+    const targetSub = first.sub;
+    // try find a valid group in that block-sub
+    const candidates = SUBS[subKey(targetBlock, targetSub)];
+    for (let g of candidates) {
+      if (grupos[g].length < 4 && puedeColocar(team, g, bomboNumber)) {
+        grupos[g].push(team); ubicadoDesde[team] = bomboNumber;
+        top4Order.push({team, group:g, block:targetBlock, sub:targetSub});
+        actualizarLog(`${team} (TOP4) asignado al Grupo ${g} (Bloque ${targetBlock} Sub ${targetSub})`);
+        return true;
+      }
+    }
+    // try displacement inside the block-sub
+    for (let g of candidates) {
+      if (grupos[g].length > 0) {
+        const ocupante = grupos[g][0];
+        if (!HOSTS.includes(ocupante) && !TOP4.includes(ocupante)) {
+          // find dest for ocupante
+          const bomboDelOcupante = ubicadoDesde[ocupante] || bomboNumber;
+          const dest = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [g]);
+          if (dest) {
+            grupos[g].splice(0,1);
+            grupos[g].push(team);
+            grupos[dest].push(ocupante);
+            ubicadoDesde[team]=bomboNumber;
+            top4Order.push({team, group:g, block:targetBlock, sub:targetSub});
+            actualizarLog(`Desplazamiento TOP4: ${team} -> Grupo ${g}; ${ocupante} -> Grupo ${dest}`);
+            return true;
+          }
+        }
+      }
+    }
+    // fallback global
+    const fallback = primerGrupoValidoPara(team, bomboNumber);
+    if (fallback) {
+      grupos[fallback].push(team); ubicadoDesde[team] = bomboNumber;
+      top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback).block, sub: grupoABloqueSub(fallback).sub});
+      actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`);
+      return true;
+    }
+    actualizarLog(`${team} (TOP4) no pudo ser ubicado en bloque opuesto (second).`);
+    return false;
+  } else if (n === 2) {
+    // third -> same block as first, opposite sub
+    const first = top4Order[0];
+    const targetBlock = first.block;
+    const targetSub = subOpuesto(first.sub);
+    const candidates = SUBS[subKey(targetBlock, targetSub)];
+    for (let g of candidates) {
+      if (grupos[g].length < 4 && puedeColocar(team, g, bomboNumber)) {
+        grupos[g].push(team); ubicadoDesde[team]=bomboNumber;
+        top4Order.push({team, group:g, block:targetBlock, sub:targetSub});
+        actualizarLog(`${team} (TOP4) asignado al Grupo ${g} (Bloque ${targetBlock} Sub ${targetSub})`);
+        return true;
+      }
+    }
+    // displacement
+    for (let g of candidates) {
+      if (grupos[g].length > 0) {
+        const ocupante = grupos[g][0];
+        if (!HOSTS.includes(ocupante) && !TOP4.includes(ocupante)) {
+          const bomboDelOcupante = ubicadoDesde[ocupante] || bomboNumber;
+          const dest = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [g]);
+          if (dest) {
+            grupos[g].splice(0,1);
+            grupos[g].push(team);
+            grupos[dest].push(ocupante);
+            ubicadoDesde[team]=bomboNumber;
+            top4Order.push({team, group:g, block:targetBlock, sub:targetSub});
+            actualizarLog(`Desplazamiento TOP4: ${team} -> Grupo ${g}; ${ocupante} -> Grupo ${dest}`);
+            return true;
+          }
+        }
+      }
+    }
+    const fallback = primerGrupoValidoPara(team, bomboNumber);
+    if (fallback) {
+      grupos[fallback].push(team); ubicadoDesde[team]=bomboNumber;
+      top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback).block, sub: grupoABloqueSub(fallback).sub});
+      actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`);
+      return true;
+    }
+    actualizarLog(`${team} (TOP4) no pudo ser ubicado (third).`);
+    return false;
+  } else if (n === 3) {
+    // fourth -> opposite block of third, same sub as third
+    const third = top4Order[2];
+    const targetBlock = bloqueOpuesto(third.block);
+    const targetSub = third.sub;
+    const candidates = SUBS[subKey(targetBlock, targetSub)];
+    for (let g of candidates) {
+      if (grupos[g].length < 4 && puedeColocar(team, g, bomboNumber)) {
+        grupos[g].push(team); ubicadoDesde[team]=bomboNumber;
+        top4Order.push({team, group:g, block:targetBlock, sub:targetSub});
+        actualizarLog(`${team} (TOP4) asignado al Grupo ${g} (Bloque ${targetBlock} Sub ${targetSub})`);
+        return true;
+      }
+    }
+    // displacement
+    for (let g of candidates) {
+      if (grupos[g].length > 0) {
+        const ocupante = grupos[g][0];
+        if (!HOSTS.includes(ocupante) && !TOP4.includes(ocupante)) {
+          const bomboDelOcupante = ubicadoDesde[ocupante] || bomboNumber;
+          const dest = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [g]);
+          if (dest) {
+            grupos[g].splice(0,1);
+            grupos[g].push(team);
+            grupos[dest].push(ocupante);
+            ubicadoDesde[team]=bomboNumber;
+            top4Order.push({team, group:g, block:targetBlock, sub:targetSub});
+            actualizarLog(`Desplazamiento TOP4: ${team} -> Grupo ${g}; ${ocupante} -> Grupo ${dest}`);
+            return true;
+          }
+        }
+      }
+    }
+    const fallback = primerGrupoValidoPara(team, bomboNumber);
+    if (fallback) {
+      grupos[fallback].push(team); ubicadoDesde[team]=bomboNumber;
+      top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback).block, sub: grupoABloqueSub(fallback).sub});
+      actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`);
+      return true;
+    }
+    actualizarLog(`${team} (TOP4) no pudo ser ubicado (fourth).`);
+    return false;
+  } else {
+    // ya hay 4 colocados (no debería pasar)
+    actualizarLog(`TOP4 ya completa, colocando ${team} con reglas normales.`);
+    const g = primerGrupoValidoPara(team, bomboNumber);
+    if (g) { grupos[g].push(team); ubicadoDesde[team]=bomboNumber; return true; }
+    return false;
+  }
+}
+
+/* ---------- Intercambio B4 (ya existente) ---------- */
 function intentarIntercambioSoloBombo4(team) {
   const candidatos = [];
   for (let g of ordenGrupos) {
@@ -247,6 +367,37 @@ function intentarIntercambioSoloBombo4(team) {
   return false;
 }
 
+/* ---------- Nuevo: intercambio con mismo bombo cuando no puede asignarse ---------- */
+/* Busca candidato en todos los grupos que venga del mismo bombo (ubicadoDesde == bomboNumber)
+   para intentar: colocar 'team' en el grupo del candidato y mover candidato a otro grupo donde quepa.
+   Devuelve true si se realizó el intercambio. */
+function intentarIntercambioMismoBombo(team, bomboNumber) {
+  for (let g of ordenGrupos) {
+    for (let idx = 0; idx < grupos[g].length; idx++) {
+      const miembro = grupos[g][idx];
+      if (ubicadoDesde[miembro] === bomboNumber) {
+        // candidate group = g
+        // can team go into g?
+        if (!puedeColocarEnGrupoExtendido(team, g, bomboNumber)) continue;
+        // try find destination for miembro in another group
+        const dest = primerGrupoValidoExcluyendo(miembro, bomboNumber, [g]);
+        if (dest) {
+          // perform swap
+          grupos[g].splice(idx,1); // remove miembro
+          grupos[g].push(team);   // put team
+          grupos[dest].push(miembro); // place member elsewhere
+          ubicadoDesde[team] = bomboNumber;
+          // ubicadoDesde[miembro] already bomboNumber
+          actualizarLog(`Intercambio mismo bombo: ${team} -> Grupo ${g}; ${miembro} -> Grupo ${dest}`);
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/* ---------- comprobador de lista de grupo ---------- */
 function grupoValidoConLista(listaMiembros) {
   let uefa = 0;
   const cnt = {};
@@ -266,7 +417,61 @@ function grupoValidoConLista(listaMiembros) {
   return true;
 }
 
-/* ---------- Interfaz ---------- */
+/* ---------- Asignación general (modificada para TOP4 y fallback intercambio mismo bombo) ---------- */
+function asignarEquipo(team, bomboNumber, isUltimoDelBombo=false) {
+  // Si es TOP4 y viene del bombo 1 -> ruteamos a asignarTop4
+  if (bomboNumber === 1 && TOP4.includes(team)) {
+    const ok = asignarTop4(team, bomboNumber);
+    if (!ok) {
+      // si no pudo asignarse por TOP4 constraints, intentamos fallback global como antes
+      const gFallback = primerGrupoValidoPara(team, bomboNumber);
+      if (gFallback) { grupos[gFallback].push(team); ubicadoDesde[team]=bomboNumber; actualizarLog(`${team} (B1 TOP4 fallback global) -> ${gFallback}`); return true; }
+      actualizarLog(`${team} (TOP4) no pudo asignarse ni con fallback.`);
+      return false;
+    }
+    return true;
+  }
+
+  // BOMBO 1 (no TOP4) - original behavior: primer grupo completamente vacío
+  if (bomboNumber === 1) {
+    if (!TOP4.includes(team)) {
+      const g = primerGrupoCompletamenteVacio();
+      if (g) { grupos[g].push(team); ubicadoDesde[team]=1; actualizarLog(`${team} (B1) -> Grupo ${g}`); return true; }
+      actualizarLog(`No hay grupo completamente vacío para ${team} (B1).`);
+      // attempt intercambio same bombo as fallback
+      const swapped = intentarIntercambioMismoBombo(team, 1);
+      if (swapped) return true;
+      return false;
+    }
+  }
+
+  // BOMBO 2/3/4: regla general confederación + 1 por bombo
+  const gValido = primerGrupoValidoPara(team, bomboNumber);
+  if (gValido) {
+    grupos[gValido].push(team);
+    ubicadoDesde[team] = bomboNumber;
+    actualizarLog(`${team} (B${bomboNumber}) -> Grupo ${gValido}`);
+    return true;
+  }
+
+  // Si no se pudo asignar automáticamente:
+  // 1) Intentar intercambio con miembro del mismo bombo (solución solicitada)
+  const intercambio = intentarIntercambioMismoBombo(team, bomboNumber);
+  if (intercambio) {
+    return true;
+  }
+
+  // 2) Si es último del bombo y bombo4, intentar intercambio exclusivo dentro B4 (ya existente)
+  if (isUltimoDelBombo && bomboNumber === 4) {
+    const okSwap = intentarIntercambioSoloBombo4(team);
+    if (okSwap) { ubicadoDesde[team] = 4; actualizarLog(`${team} (B4 último) colocado via intercambio B4`); return true; }
+  }
+
+  actualizarLog(`${team} (B${bomboNumber}) no pudo asignarse automáticamente.`);
+  return false;
+}
+
+/* ---------- Interfaz (render) ---------- */
 function claseConf(conf) {
   if (!conf) return "";
   return `conf-${conf}`;
@@ -300,6 +505,7 @@ function renderGrupos() {
   if (titulo) titulo.innerText = `Bombo ${bomboActual}`;
 }
 
+/* ---------- Cartas / Render ---------- */
 function arrayBombo(n) {
   if(n===1) return bombo1;
   if(n===2) return bombo2;
@@ -318,8 +524,7 @@ function renderCartas() {
     card.className="card";
     card.setAttribute("data-team",team);
     card.title="Haz click para revelar";
-    // al principio la carta muestra el dorso (imagen en CSS: --card-back-url)
-    card.innerHTML = ""; // dorso queda por CSS
+    card.innerHTML = ""; // dorso por CSS
     card.addEventListener("click",()=>{if(!card.classList.contains("revealed")) revelarCarta(card)});
     cont.appendChild(card);
   });
@@ -334,7 +539,8 @@ function revelarCarta(cardEl){
   const arr = arrayBombo(bomboActual);
   const isUltimo = arr.length===1;
   setTimeout(()=>{
-    asignarEquipo(team,bomboActual,isUltimo);
+    const ok = asignarEquipo(team,bomboActual,isUltimo);
+    if(!ok) actualizarLog(`Atención: ${team} no pudo asignarse automáticamente y quedó pendiente.`);
     const idx = arr.indexOf(team);
     if(idx!==-1) arr.splice(idx,1);
     renderGrupos();
@@ -343,7 +549,7 @@ function revelarCarta(cardEl){
   },600);
 }
 
-/* ---------- Flujo ---------- */
+/* ---------- Flujo y finalizar con opción compartir ---------- */
 function avanzarBombo(){
   bomboActual++;
   if(bomboActual>4){
@@ -352,40 +558,114 @@ function avanzarBombo(){
     if (titulo) titulo.innerText="Sorteo completado";
     const cont = document.getElementById("cardContainer");
     if (cont) cont.innerHTML="";
+    mostrarBotonCompartir();
     return;
   }
   actualizarLog(`➡️ Comienza Bombo ${bomboActual}`);
   renderCartas();
 }
 
+/* ---------- Botón compartir: genera captura con html2canvas (si está) y usa navigator.share si disponible ---------- */
+function mostrarBotonCompartir(){
+  // crear contenedor en DOM si no existe
+  let wrap = document.getElementById("compartirWrap");
+  if (!wrap) {
+    wrap = document.createElement("div");
+    wrap.id = "compartirWrap";
+    wrap.style.padding = "12px";
+    wrap.style.textAlign = "center";
+    const btnImg = document.createElement("button");
+    btnImg.innerText = "Compartir sorteo (imagen)";
+    btnImg.style.marginRight = "8px";
+    btnImg.onclick = generarYCompartirImagen;
+    const btnJson = document.createElement("button");
+    btnJson.innerText = "Exportar JSON";
+    btnJson.onclick = descargarJSON;
+    wrap.appendChild(btnImg);
+    wrap.appendChild(btnJson);
+    document.querySelector(".left").appendChild(wrap);
+  }
+}
+
+function descargarJSON(){
+  const resultado = {};
+  for (let g of ordenGrupos) resultado[g] = grupos[g].slice();
+  const data = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(resultado, null, 2));
+  const a = document.createElement("a");
+  a.href = data;
+  a.download = "sorteo_mundial_2026.json";
+  a.click();
+}
+
+function cargarHtml2CanvasYthen(cb){
+  // si ya cargado
+  if (window.html2canvas) return cb();
+  const s = document.createElement("script");
+  s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+  s.onload = () => cb();
+  s.onerror = () => {
+    actualizarLog("No se pudo cargar html2canvas desde CDN. Compartir por imagen no disponible.");
+  };
+  document.head.appendChild(s);
+}
+
+function generarYCompartirImagen(){
+  const container = document.getElementById("groupsContainer");
+  if (!container) return;
+  // preferir navigator.share si permite compartir imágenes: se necesita blob
+  // Generamos imagen con html2canvas
+  cargarHtml2CanvasYthen(() => {
+    if (!window.html2canvas) {
+      actualizarLog("html2canvas no disponible.");
+      return;
+    }
+    html2canvas(container, {backgroundColor: null, scale: 1}).then(canvas=>{
+      canvas.toBlob(blob=>{
+        if (navigator.canShare && navigator.canShare({files:[new File([blob],"sorteo.png",{type:"image/png"})]})) {
+          const file = new File([blob],"sorteo.png",{type:"image/png"});
+          navigator.share({files:[file], title:"Sorteo Mundial 2026", text:"Mi sorteo del Mundial 2026"}).then(()=> actualizarLog("Compartido correctamente"))
+            .catch(err => actualizarLog("Compartir cancelado o falló: " + (err.message||err)));
+        } else {
+          // fallback: descargar imagen
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "sorteo_mundial_2026.png";
+          a.click();
+          URL.revokeObjectURL(url);
+          actualizarLog("Imagen generada y descargada. Usá la imagen para compartir en redes.");
+        }
+      }, "image/png");
+    }).catch(e => actualizarLog("Error generando imagen: " + e.message));
+  });
+}
+
 /* ---------- Reinicio ---------- */
 function reiniciarTodo(){
-  // reset estado
   bomboActual = 1;
+  top4Order = [];
   primerEspecial = null;
   grupoPrimerEspecial = null;
 
-  // vaciar grupos
   for (let g of ordenGrupos) grupos[g] = [];
-
-  // colocar hosts en sus grupos fijas: A: México, B: Canadá, D: Estados Unidos
   grupos["A"].push("México");
   grupos["B"].push("Canadá");
   grupos["D"].push("Estados Unidos");
 
-  // reset ubicadoDesde completamente
   for (let k in ubicadoDesde) delete ubicadoDesde[k];
   ubicadoDesde["México"] = 0;
   ubicadoDesde["Canadá"] = 0;
   ubicadoDesde["Estados Unidos"] = 0;
 
-  // restaurar bombos
   bombo1 = ["España","Argentina","Francia","Inglaterra","Brasil","Portugal","Países Bajos","Bélgica","Alemania"];
   bombo2 = ["Australia","Austria","Colombia","Corea del Sur","Croacia","Ecuador","Irán","Japón","Marruecos","Senegal","Suiza","Uruguay"];
   bombo3 = ["Arabia Saudita","Argelia","Costa de Marfil","Egipto","Escocia","Noruega","Panamá","Paraguay","Qatar","Sudáfrica","Túnez","Uzbekistán"];
   bombo4 = ["Jordania","Cabo Verde","Ghana","Curazao","Haití","Nueva Zelanda","R EUR 1","R EUR 2","R EUR 3","R EUR 4","R INT 1","R INT 2"];
 
-  // render inicial
+  // mantener flags UI: remover compartirWrap si existe
+  const cw = document.getElementById("compartirWrap");
+  if (cw) cw.remove();
+
   renderGrupos();
   renderCartas();
   actualizarLog("🔄 Reinicio completo");
@@ -393,9 +673,7 @@ function reiniciarTodo(){
 
 /* ---------- Init ---------- */
 document.addEventListener("DOMContentLoaded",()=>{
-  // iniciar
   reiniciarTodo();
-  // listener reinicio (usa id="reiniciar" como tu HTML)
   const btn = document.getElementById("reiniciar");
   if (btn) btn.addEventListener("click", reiniciarTodo);
 });
