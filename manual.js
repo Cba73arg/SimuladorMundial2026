@@ -1,11 +1,13 @@
 /* manual.js - versión final corregida y extendida
    Cambios principales (solo lo esencial):
-   1) Regla TOP4 actualizada: España, Argentina, Francia, Inglaterra (bloques y subbloques)
-   2) Fallback: si un equipo NO puede asignarse automáticamente, intentar intercambio
-      con otro equipo DEL MISMO BOMBO (respetando restricciones para ambos grupos)
-   3) Al finalizar sorteo muestra UI para "Compartir" (usa html2canvas cuando esté disponible
-      y navigator.share si el navegador lo soporta)
-   Mantuve la lógica original intacta en lo posible y añadí comentarios donde interviné.
+   - Corregida regla TOP4: cuando un TOP4 desplaza a un ocupante,
+     el ocupante será movido a un grupo que NO tenga cabeza de serie
+     (host o equipo de B1) para evitar dejar grupos incompletos.
+   - Cuando se busca destino para desplazados se priorizan grupos válidos
+     que no posean cabeza de serie.
+   - Exportación de imagen: se aplica un fondo verde claro temporal para
+     que la imagen resultante muestre correctamente los grupos.
+   Mantengo la lógica original en lo posible.
 */
 
 /* ---------- Datos iniciales ---------- */
@@ -86,6 +88,12 @@ function grupoTieneBombo(grupoLetter, bomboNumber) {
   return grupos[grupoLetter].some(t => ubicadoDesde[t] === bomboNumber);
 }
 
+/* Verifica si un grupo tiene "cabeza de serie" (host o equipo de bombo1) */
+function tieneCabezaDeSerie(grupoLetter) {
+  return grupos[grupoLetter].some(t => HOSTS.includes(t) || ubicadoDesde[t] === 1);
+}
+
+/* Retorna true si se puede colocar 'team' en 'grupoLetter' respetando confederaciones y bombo */
 function puedeColocarEnGrupoExtendido(team, grupoLetter, bomboNumber) {
   const conf = confederacion[team];
   if (grupoTieneBombo(grupoLetter, bomboNumber)) return false;
@@ -100,17 +108,23 @@ function primerGrupoCompletamenteVacio() {
   return ordenGrupos.find(g => grupos[g].length === 0) || null;
 }
 
-function primerGrupoValidoPara(team, bomboNumber) {
+/* primerGrupoValidoPara: busca primer grupo que acepte al equipo según confederaciones y bombo.
+   nuevo parámetro avoidGroupsWithHead (default false). Si true, evita grupos que ya tengan cabeza de serie
+   (host o bombo1), útil para ubicar desplazados de manera que rellenen grupos sin cabeza. */
+function primerGrupoValidoPara(team, bomboNumber, avoidGroupsWithHead = false) {
   for (let g of ordenGrupos) {
     if (grupos[g].length >= 4) continue;
+    if (avoidGroupsWithHead && tieneCabezaDeSerie(g)) continue;
     if (puedeColocarEnGrupoExtendido(team, g, bomboNumber)) return g;
   }
   return null;
 }
 
-function primerGrupoValidoExcluyendo(team, bomboNumber, exclude = []) {
+/* primerGrupoValidoExcluyendo: igual que anterior pero excluye lista 'exclude' y permite evitar cabezas */
+function primerGrupoValidoExcluyendo(team, bomboNumber, exclude = [], avoidGroupsWithHead = false) {
   for (let g of ordenGrupos) {
     if (exclude.includes(g) || grupos[g].length >= 4) continue;
+    if (avoidGroupsWithHead && tieneCabezaDeSerie(g)) continue;
     if (puedeColocarEnGrupoExtendido(team, g, bomboNumber)) return g;
   }
   return null;
@@ -137,7 +151,6 @@ const SUBS = {
 };
 
 function grupoABloqueSub(grupo) {
-  // retorna {block:1|2, sub:'A'|'B'} o null
   if (SUBS["1A"].includes(grupo)) return {block:1, sub:"A"};
   if (SUBS["1B"].includes(grupo)) return {block:1, sub:"B"};
   if (SUBS["2A"].includes(grupo)) return {block:2, sub:"A"};
@@ -148,45 +161,20 @@ function bloqueOpuesto(block) { return block === 1 ? 2 : 1; }
 function subOpuesto(sub) { return sub === "A" ? "B" : "A"; }
 function subKey(block, sub) { return `${block}${sub}`; }
 
-/* Busca primer grupo disponible dentro de bloque-sub */
-function primerGrupoDisponibleEnBloqueSub(block, sub, bomboNumber, preferEmpty=true) {
-  const arr = SUBS[subKey(block, sub)];
-  // priorizar vacíos si preferEmpty
-  if (preferEmpty) {
-    for (let g of arr) {
-      if (grupos[g].length === 0 && puedeColocarEnGrupoExtendido(arr.length>0?arr[0]:"", g, bomboNumber) === undefined) {
-        // skip silly guard
-      }
-    }
-    // real loop respecting bombo/constraints
-    for (let g of arr) {
-      if (grupos[g].length === 0 && puedeColocarEnGrupoExtendidoPlaceholder(g, bomboNumber)) {
-        // we must check team later; this function only returns groups - we'll check validity when trying to place a specific team
-      }
-    }
-  }
-  // For simplicity this helper will just return array groups (we'll filter when assigning)
-  return arr.slice();
-}
-
-// helper that returns whether a specific team can be placed into group (wrap of can)
 function puedeColocar(team, g, bomboNumber) { return puedeColocarEnGrupoExtendido(team, g, bomboNumber); }
 
-/* ---------- asignar TOP4 (reemplaza la regla previa España/Argentina) ---------- */
-/*
- Logic:
- - Maintain top4Order array recording placed top4 in order with their assigned group and block/sub.
- - When first of top4 appears -> place in first completely empty group (as before) and record block/sub.
- - Second -> must go to opposite block, SAME sub as first (i.e., opposite block same subblock). Place in first valid group in that block-sub.
- - Third -> must go to SAME block as first, OPPOSITE sub (i.e., subB if first in subA). Place in first valid group in that block-sub.
- - Fourth -> must go to OPPOSITE block of third and SAME sub as third (i.e., completes pairing).
- - For each placement: try to find empty group in target block-sub that accepts the team; if none exist, try to displace a non-host occupant in that block-sub (move that occupant to primerGrupoValidoExcluyendo); if still not possible, fallback to global primerGrupoValidoPara.
+/* ---------- asignar TOP4 (reemplaza la regla previa España/Argentina) ----------
+   Reglas implementadas:
+   - 1º -> primer grupo vacío
+   - 2º -> bloque opuesto, mismo sub
+   - 3º -> mismo bloque que 1º, sub opuesto
+   - 4º -> bloque opuesto del 3º, mismo sub que 3º
+   Cuando se desplaza un ocupante, se intenta moverlo a un grupo VÁLIDO que NO tenga cabeza de serie
+   (para evitar que los desplazados ocupen grupos que ya tienen cabeza y dejar otros grupos sin cabeza).
 */
 function asignarTop4(team, bomboNumber) {
-  // team must be in TOP4
-  const n = top4Order.length; // how many already placed (0..3)
+  const n = top4Order.length;
   if (n === 0) {
-    // place first in first completely empty group
     const g = primerGrupoCompletamenteVacio();
     if (!g) { actualizarLog(`No hay grupo vacío para ${team} (TOP4 primer).`); return false; }
     grupos[g].push(team); ubicadoDesde[team] = bomboNumber;
@@ -194,13 +182,14 @@ function asignarTop4(team, bomboNumber) {
     top4Order.push({team, group:g, block: bs.block, sub:bs.sub});
     actualizarLog(`${team} (TOP4) asignado como primer del TOP4 en Grupo ${g} (Bloque ${bs.block} Sub ${bs.sub})`);
     return true;
-  } else if (n === 1) {
-    // second -> opposite block, same sub
+  }
+
+  if (n === 1) {
     const first = top4Order[0];
     const targetBlock = bloqueOpuesto(first.block);
     const targetSub = first.sub;
-    // try find a valid group in that block-sub
     const candidates = SUBS[subKey(targetBlock, targetSub)];
+    // 1) buscar grupo vacío válido en block-sub
     for (let g of candidates) {
       if (grupos[g].length < 4 && puedeColocar(team, g, bomboNumber)) {
         grupos[g].push(team); ubicadoDesde[team] = bomboNumber;
@@ -209,15 +198,16 @@ function asignarTop4(team, bomboNumber) {
         return true;
       }
     }
-    // try displacement inside the block-sub
+    // 2) intentar desplazar ocupante del block-sub pero buscando un DEST que NO tenga cabeza de serie
     for (let g of candidates) {
       if (grupos[g].length > 0) {
         const ocupante = grupos[g][0];
         if (!HOSTS.includes(ocupante) && !TOP4.includes(ocupante)) {
-          // find dest for ocupante
           const bomboDelOcupante = ubicadoDesde[ocupante] || bomboNumber;
-          const dest = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [g]);
+          // ! importante: pedimos dest que NO tenga cabeza de serie (avoidGroupsWithHead = true)
+          const dest = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [g], true);
           if (dest) {
+            // mover ocupante a dest (que no tiene cabeza)
             grupos[g].splice(0,1);
             grupos[g].push(team);
             grupos[dest].push(ocupante);
@@ -229,18 +219,16 @@ function asignarTop4(team, bomboNumber) {
         }
       }
     }
-    // fallback global
+    // 3) fallback global pero evitando, si posible, grupos con cabeza (priorizar sin cabeza)
+    const fallbackNoHead = primerGrupoValidoPara(team, bomboNumber, true);
+    if (fallbackNoHead) { grupos[fallbackNoHead].push(team); ubicadoDesde[team]=bomboNumber; top4Order.push({team, group:fallbackNoHead, block: grupoABloqueSub(fallbackNoHead)?.block, sub: grupoABloqueSub(fallbackNoHead)?.sub}); actualizarLog(`${team} (TOP4 fallback no-head) -> ${fallbackNoHead}`); return true; }
     const fallback = primerGrupoValidoPara(team, bomboNumber);
-    if (fallback) {
-      grupos[fallback].push(team); ubicadoDesde[team] = bomboNumber;
-      top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback).block, sub: grupoABloqueSub(fallback).sub});
-      actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`);
-      return true;
-    }
+    if (fallback) { grupos[fallback].push(team); ubicadoDesde[team] = bomboNumber; top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback)?.block, sub: grupoABloqueSub(fallback)?.sub}); actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`); return true; }
     actualizarLog(`${team} (TOP4) no pudo ser ubicado en bloque opuesto (second).`);
     return false;
-  } else if (n === 2) {
-    // third -> same block as first, opposite sub
+  }
+
+  if (n === 2) {
     const first = top4Order[0];
     const targetBlock = first.block;
     const targetSub = subOpuesto(first.sub);
@@ -253,13 +241,12 @@ function asignarTop4(team, bomboNumber) {
         return true;
       }
     }
-    // displacement
     for (let g of candidates) {
       if (grupos[g].length > 0) {
         const ocupante = grupos[g][0];
         if (!HOSTS.includes(ocupante) && !TOP4.includes(ocupante)) {
           const bomboDelOcupante = ubicadoDesde[ocupante] || bomboNumber;
-          const dest = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [g]);
+          const dest = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [g], true);
           if (dest) {
             grupos[g].splice(0,1);
             grupos[g].push(team);
@@ -272,17 +259,15 @@ function asignarTop4(team, bomboNumber) {
         }
       }
     }
+    const fallbackNoHead = primerGrupoValidoPara(team, bomboNumber, true);
+    if (fallbackNoHead) { grupos[fallbackNoHead].push(team); ubicadoDesde[team]=bomboNumber; top4Order.push({team, group:fallbackNoHead, block: grupoABloqueSub(fallbackNoHead)?.block, sub: grupoABloqueSub(fallbackNoHead)?.sub}); actualizarLog(`${team} (TOP4 fallback no-head) -> ${fallbackNoHead}`); return true; }
     const fallback = primerGrupoValidoPara(team, bomboNumber);
-    if (fallback) {
-      grupos[fallback].push(team); ubicadoDesde[team]=bomboNumber;
-      top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback).block, sub: grupoABloqueSub(fallback).sub});
-      actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`);
-      return true;
-    }
+    if (fallback) { grupos[fallback].push(team); ubicadoDesde[team]=bomboNumber; top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback)?.block, sub: grupoABloqueSub(fallback)?.sub}); actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`); return true; }
     actualizarLog(`${team} (TOP4) no pudo ser ubicado (third).`);
     return false;
-  } else if (n === 3) {
-    // fourth -> opposite block of third, same sub as third
+  }
+
+  if (n === 3) {
     const third = top4Order[2];
     const targetBlock = bloqueOpuesto(third.block);
     const targetSub = third.sub;
@@ -295,13 +280,12 @@ function asignarTop4(team, bomboNumber) {
         return true;
       }
     }
-    // displacement
     for (let g of candidates) {
       if (grupos[g].length > 0) {
         const ocupante = grupos[g][0];
         if (!HOSTS.includes(ocupante) && !TOP4.includes(ocupante)) {
           const bomboDelOcupante = ubicadoDesde[ocupante] || bomboNumber;
-          const dest = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [g]);
+          const dest = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [g], true);
           if (dest) {
             grupos[g].splice(0,1);
             grupos[g].push(team);
@@ -314,22 +298,18 @@ function asignarTop4(team, bomboNumber) {
         }
       }
     }
+    const fallbackNoHead = primerGrupoValidoPara(team, bomboNumber, true);
+    if (fallbackNoHead) { grupos[fallbackNoHead].push(team); ubicadoDesde[team]=bomboNumber; top4Order.push({team, group:fallbackNoHead, block: grupoABloqueSub(fallbackNoHead)?.block, sub: grupoABloqueSub(fallbackNoHead)?.sub}); actualizarLog(`${team} (TOP4 fallback no-head) -> ${fallbackNoHead}`); return true; }
     const fallback = primerGrupoValidoPara(team, bomboNumber);
-    if (fallback) {
-      grupos[fallback].push(team); ubicadoDesde[team]=bomboNumber;
-      top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback).block, sub: grupoABloqueSub(fallback).sub});
-      actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`);
-      return true;
-    }
+    if (fallback) { grupos[fallback].push(team); ubicadoDesde[team]=bomboNumber; top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback)?.block, sub: grupoABloqueSub(fallback)?.sub}); actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`); return true; }
     actualizarLog(`${team} (TOP4) no pudo ser ubicado (fourth).`);
     return false;
-  } else {
-    // ya hay 4 colocados (no debería pasar)
-    actualizarLog(`TOP4 ya completa, colocando ${team} con reglas normales.`);
-    const g = primerGrupoValidoPara(team, bomboNumber);
-    if (g) { grupos[g].push(team); ubicadoDesde[team]=bomboNumber; return true; }
-    return false;
   }
+
+  actualizarLog(`TOP4 ya completa, colocando ${team} con reglas normales.`);
+  const g = primerGrupoValidoPara(team, bomboNumber);
+  if (g) { grupos[g].push(team); ubicadoDesde[team]=bomboNumber; return true; }
+  return false;
 }
 
 /* ---------- Intercambio B4 (ya existente) ---------- */
@@ -367,27 +347,25 @@ function intentarIntercambioSoloBombo4(team) {
   return false;
 }
 
-/* ---------- Nuevo: intercambio con mismo bombo cuando no puede asignarse ---------- */
-/* Busca candidato en todos los grupos que venga del mismo bombo (ubicadoDesde == bomboNumber)
-   para intentar: colocar 'team' en el grupo del candidato y mover candidato a otro grupo donde quepa.
-   Devuelve true si se realizó el intercambio. */
+/* ---------- Nuevo: intercambio con mismo bombo cuando no puede asignarse ----------
+   Ahora cuando se busca destino para el miembro desplazado intentamos ubicarlo preferentemente
+   en un grupo que NO tenga cabeza de serie (avoidGroupsWithHead = true). Esto evita que los
+   desplazados vayan a grupos que ya tienen cabeza, lo que provocaba grupos incompletos.
+*/
 function intentarIntercambioMismoBombo(team, bomboNumber) {
   for (let g of ordenGrupos) {
     for (let idx = 0; idx < grupos[g].length; idx++) {
       const miembro = grupos[g][idx];
       if (ubicadoDesde[miembro] === bomboNumber) {
-        // candidate group = g
-        // can team go into g?
         if (!puedeColocarEnGrupoExtendido(team, g, bomboNumber)) continue;
-        // try find destination for miembro in another group
-        const dest = primerGrupoValidoExcluyendo(miembro, bomboNumber, [g]);
+        // buscamos dest para 'miembro' en otro grupo que no tenga cabeza de serie
+        const dest = primerGrupoValidoExcluyendo(miembro, bomboNumber, [g], true);
         if (dest) {
-          // perform swap
-          grupos[g].splice(idx,1); // remove miembro
-          grupos[g].push(team);   // put team
-          grupos[dest].push(miembro); // place member elsewhere
+          // swap: ponemos team en g y miembro en dest
+          grupos[g].splice(idx,1);
+          grupos[g].push(team);
+          grupos[dest].push(miembro);
           ubicadoDesde[team] = bomboNumber;
-          // ubicadoDesde[miembro] already bomboNumber
           actualizarLog(`Intercambio mismo bombo: ${team} -> Grupo ${g}; ${miembro} -> Grupo ${dest}`);
           return true;
         }
@@ -419,11 +397,9 @@ function grupoValidoConLista(listaMiembros) {
 
 /* ---------- Asignación general (modificada para TOP4 y fallback intercambio mismo bombo) ---------- */
 function asignarEquipo(team, bomboNumber, isUltimoDelBombo=false) {
-  // Si es TOP4 y viene del bombo 1 -> ruteamos a asignarTop4
   if (bomboNumber === 1 && TOP4.includes(team)) {
     const ok = asignarTop4(team, bomboNumber);
     if (!ok) {
-      // si no pudo asignarse por TOP4 constraints, intentamos fallback global como antes
       const gFallback = primerGrupoValidoPara(team, bomboNumber);
       if (gFallback) { grupos[gFallback].push(team); ubicadoDesde[team]=bomboNumber; actualizarLog(`${team} (B1 TOP4 fallback global) -> ${gFallback}`); return true; }
       actualizarLog(`${team} (TOP4) no pudo asignarse ni con fallback.`);
@@ -432,20 +408,17 @@ function asignarEquipo(team, bomboNumber, isUltimoDelBombo=false) {
     return true;
   }
 
-  // BOMBO 1 (no TOP4) - original behavior: primer grupo completamente vacío
   if (bomboNumber === 1) {
     if (!TOP4.includes(team)) {
       const g = primerGrupoCompletamenteVacio();
       if (g) { grupos[g].push(team); ubicadoDesde[team]=1; actualizarLog(`${team} (B1) -> Grupo ${g}`); return true; }
       actualizarLog(`No hay grupo completamente vacío para ${team} (B1).`);
-      // attempt intercambio same bombo as fallback
       const swapped = intentarIntercambioMismoBombo(team, 1);
       if (swapped) return true;
       return false;
     }
   }
 
-  // BOMBO 2/3/4: regla general confederación + 1 por bombo
   const gValido = primerGrupoValidoPara(team, bomboNumber);
   if (gValido) {
     grupos[gValido].push(team);
@@ -454,14 +427,11 @@ function asignarEquipo(team, bomboNumber, isUltimoDelBombo=false) {
     return true;
   }
 
-  // Si no se pudo asignar automáticamente:
-  // 1) Intentar intercambio con miembro del mismo bombo (solución solicitada)
   const intercambio = intentarIntercambioMismoBombo(team, bomboNumber);
   if (intercambio) {
     return true;
   }
 
-  // 2) Si es último del bombo y bombo4, intentar intercambio exclusivo dentro B4 (ya existente)
   if (isUltimoDelBombo && bomboNumber === 4) {
     const okSwap = intentarIntercambioSoloBombo4(team);
     if (okSwap) { ubicadoDesde[team] = 4; actualizarLog(`${team} (B4 último) colocado via intercambio B4`); return true; }
@@ -567,7 +537,6 @@ function avanzarBombo(){
 
 /* ---------- Botón compartir: genera captura con html2canvas (si está) y usa navigator.share si disponible ---------- */
 function mostrarBotonCompartir(){
-  // crear contenedor en DOM si no existe
   let wrap = document.getElementById("compartirWrap");
   if (!wrap) {
     wrap = document.createElement("div");
@@ -598,7 +567,6 @@ function descargarJSON(){
 }
 
 function cargarHtml2CanvasYthen(cb){
-  // si ya cargado
   if (window.html2canvas) return cb();
   const s = document.createElement("script");
   s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
@@ -609,24 +577,35 @@ function cargarHtml2CanvasYthen(cb){
   document.head.appendChild(s);
 }
 
+/* ---------- Exportar imagen: aplicamos fondo verde claro temporalmente ---------- */
 function generarYCompartirImagen(){
   const container = document.getElementById("groupsContainer");
   if (!container) return;
-  // preferir navigator.share si permite compartir imágenes: se necesita blob
-  // Generamos imagen con html2canvas
   cargarHtml2CanvasYthen(() => {
     if (!window.html2canvas) {
       actualizarLog("html2canvas no disponible.");
       return;
     }
+
+    // Guardamos estilo previo para restaurar
+    const prevBg = container.style.background;
+    const prevPadding = container.style.padding;
+    // Aplicar fondo verde claro y algo de padding para la captura
+    container.style.background = "#daf3d9"; // verde claro
+    container.style.padding = container.style.padding || "12px";
+
+    // html2canvas con backgroundColor null -> usará el estilo aplicado
     html2canvas(container, {backgroundColor: null, scale: 1}).then(canvas=>{
+      // Restaurar estilos
+      container.style.background = prevBg;
+      container.style.padding = prevPadding;
+
       canvas.toBlob(blob=>{
         if (navigator.canShare && navigator.canShare({files:[new File([blob],"sorteo.png",{type:"image/png"})]})) {
           const file = new File([blob],"sorteo.png",{type:"image/png"});
           navigator.share({files:[file], title:"Sorteo Mundial 2026", text:"Mi sorteo del Mundial 2026"}).then(()=> actualizarLog("Compartido correctamente"))
             .catch(err => actualizarLog("Compartir cancelado o falló: " + (err.message||err)));
         } else {
-          // fallback: descargar imagen
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
@@ -636,7 +615,12 @@ function generarYCompartirImagen(){
           actualizarLog("Imagen generada y descargada. Usá la imagen para compartir en redes.");
         }
       }, "image/png");
-    }).catch(e => actualizarLog("Error generando imagen: " + e.message));
+    }).catch(e => {
+      // Restaurar si fallo
+      container.style.background = prevBg;
+      container.style.padding = prevPadding;
+      actualizarLog("Error generando imagen: " + e.message);
+    });
   });
 }
 
@@ -644,9 +628,7 @@ function generarYCompartirImagen(){
 function reiniciarTodo(){
   bomboActual = 1;
   top4Order = [];
-  primerEspecial = null;
-  grupoPrimerEspecial = null;
-
+  // limpiar cualquier estado extra
   for (let g of ordenGrupos) grupos[g] = [];
   grupos["A"].push("México");
   grupos["B"].push("Canadá");
@@ -662,7 +644,6 @@ function reiniciarTodo(){
   bombo3 = ["Arabia Saudita","Argelia","Costa de Marfil","Egipto","Escocia","Noruega","Panamá","Paraguay","Qatar","Sudáfrica","Túnez","Uzbekistán"];
   bombo4 = ["Jordania","Cabo Verde","Ghana","Curazao","Haití","Nueva Zelanda","R EUR 1","R EUR 2","R EUR 3","R EUR 4","R INT 1","R INT 2"];
 
-  // mantener flags UI: remover compartirWrap si existe
   const cw = document.getElementById("compartirWrap");
   if (cw) cw.remove();
 
