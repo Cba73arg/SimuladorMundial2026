@@ -37,7 +37,7 @@ const confederacion = {
 
 /* Ubicación inicial de equipos (origen bombo) */
 const ubicadoDesde = {};
-["México","Canadá","Estados Unidos"].forEach(h=> ubicadoDesde[h]=0);
+["México":"CONCACAF","Canadá":"CONCACAF","Estados Unidos":"CONCACAF"].forEach(h=> ubicadoDesde[h]=0);
 
 /* Estado TOP4 (España, Argentina, Francia, Inglaterra) */
 const TOP4 = ["España","Argentina","Francia","Inglaterra"];
