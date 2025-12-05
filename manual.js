@@ -1,13 +1,17 @@
 /* manual.js - versión final corregida y extendida
-   Cambios principales:
-   - Regla TOP4: España, Argentina, Francia, Inglaterra (bloques y subbloques)
-   - Intercambio 1 a 1 entre equipos del mismo bombo si no se puede asignar
-   - Resortear el bombo (2/3/4) si no hay intercambio posible
-   - Evitar que desplazados ocupen grupos con cabeza de serie cuando sea posible
-   - Exportar imagen con fondo verde claro temporal
+   Cambios principales realizados:
+   - Se asegura la detección de confederación para los anfitriones (CONCACAF).
+   - Regla TOP4 reforzada para que España y Argentina no compartan el mismo bloque
+     (no pueden encontrarse antes de la final).
+   - Asignaciones marcan ubicadoDesde[team] = bomboNumber ANTES de insertar en el grupo,
+     evitando inconsistencias a la hora de validar intercambios.
+   - Intercambio 1-a-1 entre equipos del mismo bombo implementado y priorizado (bombos 2,3,4).
+   - Si no se encuentra intercambio válido en bombo >=2, se resortea el bombo.
+   - Cuando se desplaza un ocupante por TOP4, se intenta ubicarlo preferentemente en un grupo
+     SIN cabeza de serie cuando sea posible.
 */
 
-/* ---------- Datos iniciales ---------- */
+ /* ---------- Datos iniciales ---------- */
 const ordenGrupos = ["A","B","C","D","E","F","G","H","I","J","K","L"];
 const HOSTS = ["México","Canadá","Estados Unidos"];
 
@@ -27,7 +31,8 @@ let bombo4 = ["Jordania","Cabo Verde","Ghana","Curazao","Haití","Nueva Zelanda"
 
 /* Confederaciones */
 const confederacion = {
-  "México":"CONCACAF","Canadá":"CONCACAF","Estados Unidos":"CONCACAF","España":"UEFA","Argentina":"CONMEBOL","Francia":"UEFA","Inglaterra":"UEFA","Brasil":"CONMEBOL","Portugal":"UEFA","Países Bajos":"UEFA","Bélgica":"UEFA","Alemania":"UEFA",
+  "México":"CONCACAF","Canadá":"CONCACAF","Estados Unidos":"CONCACAF",
+  "España":"UEFA","Argentina":"CONMEBOL","Francia":"UEFA","Inglaterra":"UEFA","Brasil":"CONMEBOL","Portugal":"UEFA","Países Bajos":"UEFA","Bélgica":"UEFA","Alemania":"UEFA",
   "Australia":"AFC","Austria":"UEFA","Colombia":"CONMEBOL","Corea del Sur":"AFC","Croacia":"UEFA","Ecuador":"CONMEBOL","Irán":"AFC","Japón":"AFC","Marruecos":"CAF","Senegal":"CAF","Suiza":"UEFA","Uruguay":"CONMEBOL",
   "Arabia Saudita":"AFC","Argelia":"CAF","Costa de Marfil":"CAF","Egipto":"CAF","Escocia":"UEFA","Noruega":"UEFA","Panamá":"CONCACAF","Paraguay":"CONMEBOL","Qatar":"AFC","Sudáfrica":"CAF","Túnez":"CAF","Uzbekistán":"AFC",
   "Jordania":"AFC","Cabo Verde":"CAF","Ghana":"CAF","Curazao":"CONCACAF","Haití":"CONCACAF","Nueva Zelanda":"OFC",
@@ -60,7 +65,11 @@ function mezclar(arr) {
 
 function actualizarLog(msg) {
   const l = document.getElementById("log");
-  if (!l) return;
+  if (!l) {
+    // si no hay log en el DOM, console para debug
+    console.log(msg);
+    return;
+  }
   const ts = new Date().toLocaleTimeString();
   l.innerHTML = `<div>[${ts}] ${msg}</div>` + l.innerHTML;
 }
@@ -139,8 +148,8 @@ function obtenerGrupoOpuestoPara(grupo) {
   return null;
 }
 
-/* ---------- Nuevas utilidades para BLOQUES / SUBBLOQUES (TOP4) ---------- */
-/* Subbloques:
+/* ---------- Nuevas utilidades para BLOQUES / SUBBLOQUES (TOP4) ----------
+   Subbloques definidos originalmente por el usuario:
    BLOQUE 1: SUBA: E,I,F   SUBB: H,G
    BLOQUE 2: SUBA: C,L     SUBB: J,K
 */
@@ -184,13 +193,27 @@ function grupoValidoConLista(listaMiembros) {
   return true;
 }
 
-/* ---------- Asignar TOP4 (reglas con prioridad al mover desplazados a grupos sin cabeza) ---------- */
+/* ---------- Asignar TOP4 (reglas con prioridad al mover desplazados a grupos sin cabeza) ----------
+   Además: España y Argentina NO pueden quedar en el mismo bloque (se obliga bloque opuesto).
+*/
 function asignarTop4(team, bomboNumber) {
   const n = top4Order.length;
+
+  // helper: si existe la pareja Spain/Argentina ya colocada, asegurar bloque opuesto
+  function fuerzaBloqueOpuestoSiCorresponde(team, desiredBlock) {
+    // si team es España o Argentina y el otro ya está colocado, forzamos el bloque opuesto de ese otro
+    const pareja = (team === "España") ? "Argentina" : (team === "Argentina") ? "España" : null;
+    if (!pareja) return desiredBlock;
+    const found = top4Order.find(x => x.team === pareja);
+    if (found) return bloqueOpuesto(found.block);
+    return desiredBlock;
+  }
+
   if (n === 0) {
     const g = primerGrupoCompletamenteVacio();
     if (!g) { actualizarLog(`No hay grupo vacío para ${team} (TOP4 primer).`); return false; }
-    grupos[g].push(team); ubicadoDesde[team] = bomboNumber;
+    ubicadoDesde[team] = bomboNumber;
+    grupos[g].push(team);
     const bs = grupoABloqueSub(g);
     top4Order.push({team, group:g, block: bs.block, sub:bs.sub});
     actualizarLog(`${team} (TOP4) asignado como primer del TOP4 en Grupo ${g} (Bloque ${bs.block} Sub ${bs.sub})`);
@@ -199,13 +222,16 @@ function asignarTop4(team, bomboNumber) {
 
   if (n === 1) {
     const first = top4Order[0];
-    const targetBlock = bloqueOpuesto(first.block);
+    let targetBlock = bloqueOpuesto(first.block);
+    // si team es España/Argentina y la otra de la pareja ya está en top4, forzamos bloque opuesto
+    targetBlock = fuerzaBloqueOpuestoSiCorresponde(team, targetBlock);
     const targetSub = first.sub;
     const candidates = SUBS[subKey(targetBlock, targetSub)];
-    // 1) buscar grupo válido en block-sub
+    // 1) buscar grupo vacío/valido en block-sub
     for (let g of candidates) {
       if (grupos[g].length < 4 && puedeColocar(team, g, bomboNumber)) {
-        grupos[g].push(team); ubicadoDesde[team] = bomboNumber;
+        ubicadoDesde[team] = bomboNumber;
+        grupos[g].push(team);
         top4Order.push({team, group:g, block:targetBlock, sub:targetSub});
         actualizarLog(`${team} (TOP4) asignado al Grupo ${g} (Bloque ${targetBlock} Sub ${targetSub})`);
         return true;
@@ -219,10 +245,12 @@ function asignarTop4(team, bomboNumber) {
           const bomboDelOcupante = ubicadoDesde[ocupante] || bomboNumber;
           const dest = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [g], true);
           if (dest) {
+            // mover ocupante a dest (preferente sin cabeza)
+            // asegurar ubicadoDesde para team antes de hacer cambios
+            ubicadoDesde[team] = bomboNumber;
             grupos[g].splice(0,1);
             grupos[g].push(team);
             grupos[dest].push(ocupante);
-            ubicadoDesde[team]=bomboNumber;
             top4Order.push({team, group:g, block:targetBlock, sub:targetSub});
             actualizarLog(`Desplazamiento TOP4: ${team} -> Grupo ${g}; ${ocupante} -> Grupo ${dest}`);
             return true;
@@ -232,21 +260,35 @@ function asignarTop4(team, bomboNumber) {
     }
     // 3) fallback global pero priorizando sin cabeza
     const fallbackNoHead = primerGrupoValidoPara(team, bomboNumber, true);
-    if (fallbackNoHead) { grupos[fallbackNoHead].push(team); ubicadoDesde[team]=bomboNumber; top4Order.push({team, group:fallbackNoHead, block: grupoABloqueSub(fallbackNoHead)?.block, sub: grupoABloqueSub(fallbackNoHead)?.sub}); actualizarLog(`${team} (TOP4 fallback no-head) -> ${fallbackNoHead}`); return true; }
+    if (fallbackNoHead) {
+      ubicadoDesde[team] = bomboNumber;
+      grupos[fallbackNoHead].push(team);
+      top4Order.push({team, group:fallbackNoHead, block: grupoABloqueSub(fallbackNoHead)?.block, sub: grupoABloqueSub(fallbackNoHead)?.sub});
+      actualizarLog(`${team} (TOP4 fallback no-head) -> ${fallbackNoHead}`);
+      return true;
+    }
     const fallback = primerGrupoValidoPara(team, bomboNumber);
-    if (fallback) { grupos[fallback].push(team); ubicadoDesde[team] = bomboNumber; top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback)?.block, sub: grupoABloqueSub(fallback)?.sub}); actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`); return true; }
+    if (fallback) {
+      ubicadoDesde[team] = bomboNumber;
+      grupos[fallback].push(team);
+      top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback)?.block, sub: grupoABloqueSub(fallback)?.sub});
+      actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`);
+      return true;
+    }
     actualizarLog(`${team} (TOP4) no pudo ser ubicado en bloque opuesto (second).`);
     return false;
   }
 
   if (n === 2) {
     const first = top4Order[0];
-    const targetBlock = first.block;
+    let targetBlock = first.block;
+    targetBlock = fuerzaBloqueOpuestoSiCorresponde(team, targetBlock);
     const targetSub = subOpuesto(first.sub);
     const candidates = SUBS[subKey(targetBlock, targetSub)];
     for (let g of candidates) {
       if (grupos[g].length < 4 && puedeColocar(team, g, bomboNumber)) {
-        grupos[g].push(team); ubicadoDesde[team]=bomboNumber;
+        ubicadoDesde[team] = bomboNumber;
+        grupos[g].push(team);
         top4Order.push({team, group:g, block:targetBlock, sub:targetSub});
         actualizarLog(`${team} (TOP4) asignado al Grupo ${g} (Bloque ${targetBlock} Sub ${targetSub})`);
         return true;
@@ -259,10 +301,10 @@ function asignarTop4(team, bomboNumber) {
           const bomboDelOcupante = ubicadoDesde[ocupante] || bomboNumber;
           const dest = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [g], true);
           if (dest) {
+            ubicadoDesde[team] = bomboNumber;
             grupos[g].splice(0,1);
             grupos[g].push(team);
             grupos[dest].push(ocupante);
-            ubicadoDesde[team]=bomboNumber;
             top4Order.push({team, group:g, block:targetBlock, sub:targetSub});
             actualizarLog(`Desplazamiento TOP4: ${team} -> Grupo ${g}; ${ocupante} -> Grupo ${dest}`);
             return true;
@@ -271,21 +313,35 @@ function asignarTop4(team, bomboNumber) {
       }
     }
     const fallbackNoHead = primerGrupoValidoPara(team, bomboNumber, true);
-    if (fallbackNoHead) { grupos[fallbackNoHead].push(team); ubicadoDesde[team]=bomboNumber; top4Order.push({team, group:fallbackNoHead, block: grupoABloqueSub(fallbackNoHead)?.block, sub: grupoABloqueSub(fallbackNoHead)?.sub}); actualizarLog(`${team} (TOP4 fallback no-head) -> ${fallbackNoHead}`); return true; }
+    if (fallbackNoHead) {
+      ubicadoDesde[team] = bomboNumber;
+      grupos[fallbackNoHead].push(team);
+      top4Order.push({team, group:fallbackNoHead, block: grupoABloqueSub(fallbackNoHead)?.block, sub: grupoABloqueSub(fallbackNoHead)?.sub});
+      actualizarLog(`${team} (TOP4 fallback no-head) -> ${fallbackNoHead}`);
+      return true;
+    }
     const fallback = primerGrupoValidoPara(team, bomboNumber);
-    if (fallback) { grupos[fallback].push(team); ubicadoDesde[team]=bomboNumber; top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback)?.block, sub: grupoABloqueSub(fallback)?.sub}); actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`); return true; }
+    if (fallback) {
+      ubicadoDesde[team] = bomboNumber;
+      grupos[fallback].push(team);
+      top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback)?.block, sub: grupoABloqueSub(fallback)?.sub});
+      actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`);
+      return true;
+    }
     actualizarLog(`${team} (TOP4) no pudo ser ubicado (third).`);
     return false;
   }
 
   if (n === 3) {
     const third = top4Order[2];
-    const targetBlock = bloqueOpuesto(third.block);
+    let targetBlock = bloqueOpuesto(third.block);
+    targetBlock = fuerzaBloqueOpuestoSiCorresponde(team, targetBlock);
     const targetSub = third.sub;
     const candidates = SUBS[subKey(targetBlock, targetSub)];
     for (let g of candidates) {
       if (grupos[g].length < 4 && puedeColocar(team, g, bomboNumber)) {
-        grupos[g].push(team); ubicadoDesde[team]=bomboNumber;
+        ubicadoDesde[team] = bomboNumber;
+        grupos[g].push(team);
         top4Order.push({team, group:g, block:targetBlock, sub:targetSub});
         actualizarLog(`${team} (TOP4) asignado al Grupo ${g} (Bloque ${targetBlock} Sub ${targetSub})`);
         return true;
@@ -298,10 +354,10 @@ function asignarTop4(team, bomboNumber) {
           const bomboDelOcupante = ubicadoDesde[ocupante] || bomboNumber;
           const dest = primerGrupoValidoExcluyendo(ocupante, bomboDelOcupante, [g], true);
           if (dest) {
+            ubicadoDesde[team] = bomboNumber;
             grupos[g].splice(0,1);
             grupos[g].push(team);
             grupos[dest].push(ocupante);
-            ubicadoDesde[team]=bomboNumber;
             top4Order.push({team, group:g, block:targetBlock, sub:targetSub});
             actualizarLog(`Desplazamiento TOP4: ${team} -> Grupo ${g}; ${ocupante} -> Grupo ${dest}`);
             return true;
@@ -310,16 +366,32 @@ function asignarTop4(team, bomboNumber) {
       }
     }
     const fallbackNoHead = primerGrupoValidoPara(team, bomboNumber, true);
-    if (fallbackNoHead) { grupos[fallbackNoHead].push(team); ubicadoDesde[team]=bomboNumber; top4Order.push({team, group:fallbackNoHead, block: grupoABloqueSub(fallbackNoHead)?.block, sub: grupoABloqueSub(fallbackNoHead)?.sub}); actualizarLog(`${team} (TOP4 fallback no-head) -> ${fallbackNoHead}`); return true; }
+    if (fallbackNoHead) {
+      ubicadoDesde[team] = bomboNumber;
+      grupos[fallbackNoHead].push(team);
+      top4Order.push({team, group:fallbackNoHead, block: grupoABloqueSub(fallbackNoHead)?.block, sub: grupoABloqueSub(fallbackNoHead)?.sub});
+      actualizarLog(`${team} (TOP4 fallback no-head) -> ${fallbackNoHead}`);
+      return true;
+    }
     const fallback = primerGrupoValidoPara(team, bomboNumber);
-    if (fallback) { grupos[fallback].push(team); ubicadoDesde[team]=bomboNumber; top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback)?.block, sub: grupoABloqueSub(fallback)?.sub}); actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`); return true; }
+    if (fallback) {
+      ubicadoDesde[team] = bomboNumber;
+      grupos[fallback].push(team);
+      top4Order.push({team, group:fallback, block: grupoABloqueSub(fallback)?.block, sub: grupoABloqueSub(fallback)?.sub});
+      actualizarLog(`${team} (TOP4 fallback) -> Grupo ${fallback}`);
+      return true;
+    }
     actualizarLog(`${team} (TOP4) no pudo ser ubicado (fourth).`);
     return false;
   }
 
   // si es >3, fallback simple
   const g = primerGrupoValidoPara(team, bomboNumber);
-  if (g) { grupos[g].push(team); ubicadoDesde[team]=bomboNumber; return true; }
+  if (g) {
+    ubicadoDesde[team] = bomboNumber;
+    grupos[g].push(team);
+    return true;
+  }
   return false;
 }
 
@@ -348,9 +420,12 @@ function intentarIntercambioSoloBombo4(team) {
       const tmpB = grupos[g2].slice();
       tmpB.push(miembro);
       if (grupoValidoConLista(tmpB)) {
+        // realizar intercambio real
         grupos[grupoA].splice(grupos[grupoA].indexOf(miembro),1);
+        ubicadoDesde[team] = 4;
         grupos[grupoA].push(team);
         grupos[g2].push(miembro);
+        actualizarLog(`Intercambio B4: ${team} -> Grupo ${grupoA}; ${miembro} -> Grupo ${g2}`);
         return true;
       }
     }
@@ -368,11 +443,12 @@ function intentarIntercambioMismoBombo(team, bomboNumber) {
         // buscamos dest para 'miembro' en otro grupo que no tenga cabeza de serie
         const dest = primerGrupoValidoExcluyendo(miembro, bomboNumber, [g], true);
         if (dest) {
+          // swap: ponemos team en g y miembro en dest
+          ubicadoDesde[team] = bomboNumber;
           grupos[g].splice(idx,1);
           grupos[g].push(team);
           grupos[dest].push(miembro);
-          ubicadoDesde[team] = bomboNumber;
-          actualizarLog(`Intercambio mismo bombo: ${team} -> Grupo ${g}; ${miembro} -> Grupo ${dest}`);
+          actualizarLog(`Intercambio mismo bombo (relajado): ${team} -> Grupo ${g}; ${miembro} -> Grupo ${dest}`);
           return true;
         }
       }
@@ -408,14 +484,9 @@ function intercambioUnoAUno(team, bomboNumber) {
         const listaB = grupos[gB].slice();
         listaB.push(miembro);
         // validar confederaciones y bombo para ambas listas
-        // pero debemos comprobar bombo-uniqueness: miembro ya tiene su bombo y team también
-        // ubicadosDesde no cambiará hasta finalizar intercambio ; usamos grupoValidoConLista para validar
-        // pero grupoValidoConLista usa ubicadoDesde. Para "team" aún no tiene ubicadoDesde (o tendrá bomboNumber).
         // Para simular correctamente, temporalmente asignamos ubicadoDesde simulados:
         const prevTeamUb = ubicadoDesde[team];
-        const prevMiembroUb = ubicadoDesde[miembro];
         ubicadoDesde[team] = bomboNumber; // simular
-        // miembro ya tiene ubicadoDesde[miembro] == bomboNumber
         const validA = grupoValidoConLista(listaA);
         const validB = grupoValidoConLista(listaB);
         // revertir la simulación
@@ -424,9 +495,9 @@ function intercambioUnoAUno(team, bomboNumber) {
         if (validA && validB && puedeColocarEnGrupoExtendido(miembro, gB, bomboNumber)) {
           // realizar intercambio: remover miembro de gA y poner team; poner miembro en gB
           grupos[gA].splice(grupos[gA].indexOf(miembro),1);
+          ubicadoDesde[team] = bomboNumber;
           grupos[gA].push(team);
           grupos[gB].push(miembro);
-          ubicadoDesde[team] = bomboNumber;
           // ubicadoDesde[miembro] ya era bomboNumber
           actualizarLog(`Intercambio 1-a-1: ${team} -> Grupo ${gA}; ${miembro} -> Grupo ${gB}`);
           return true;
@@ -460,7 +531,7 @@ function asignarEquipo(team, bomboNumber, isUltimoDelBombo=false) {
     const ok = asignarTop4(team, bomboNumber);
     if (!ok) {
       const gFallback = primerGrupoValidoPara(team, bomboNumber);
-      if (gFallback) { grupos[gFallback].push(team); ubicadoDesde[team]=bomboNumber; actualizarLog(`${team} (B1 TOP4 fallback global) -> ${gFallback}`); return true; }
+      if (gFallback) { ubicadoDesde[team]=bomboNumber; grupos[gFallback].push(team); actualizarLog(`${team} (B1 TOP4 fallback global) -> ${gFallback}`); return true; }
       actualizarLog(`${team} (TOP4) no pudo asignarse ni con fallback.`);
       return false;
     }
@@ -471,7 +542,7 @@ function asignarEquipo(team, bomboNumber, isUltimoDelBombo=false) {
   if (bomboNumber === 1) {
     if (!TOP4.includes(team)) {
       const g = primerGrupoCompletamenteVacio();
-      if (g) { grupos[g].push(team); ubicadoDesde[team]=1; actualizarLog(`${team} (B1) -> Grupo ${g}`); return true; }
+      if (g) { ubicadoDesde[team]=1; grupos[g].push(team); actualizarLog(`${team} (B1) -> Grupo ${g}`); return true; }
       actualizarLog(`No hay grupo completamente vacío para ${team} (B1).`);
       const swapped = intentarIntercambioMismoBombo(team, 1);
       if (swapped) return true;
@@ -482,8 +553,8 @@ function asignarEquipo(team, bomboNumber, isUltimoDelBombo=false) {
   // BOMBO 2/3/4: regla general confederación + 1 por bombo
   const gValido = primerGrupoValidoPara(team, bomboNumber);
   if (gValido) {
-    grupos[gValido].push(team);
     ubicadoDesde[team] = bomboNumber;
+    grupos[gValido].push(team);
     actualizarLog(`${team} (B${bomboNumber}) -> Grupo ${gValido}`);
     return true;
   }
