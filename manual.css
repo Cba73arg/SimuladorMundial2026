@@ -59,7 +59,6 @@ body {
 }
 
 /* CARTA: dorso (antes de revelar) y anverso (revelada) */
-/* Usamos estructura con flag y nombre en el anverso */
 .card {
   width:140px;
   height:84px;
@@ -80,10 +79,9 @@ body {
   background-position: center;
 }
 
-/* Hover */
 .card:hover { transform: translateY(-6px) scale(1.02); }
 
-/* Estado revelada: anverso con color y contenido */
+/* Estado revelada */
 .card.revealed {
   background: linear-gradient(180deg,#ffffff,#f0e68c);
   color:#06202a;
@@ -94,7 +92,6 @@ body {
   padding:8px;
 }
 
-/* Contenido interno cuando revelada */
 .card .flag { font-size: 28px; line-height: 1; }
 .card .name { font-size: 14px; text-align:center; font-weight:800; }
 
@@ -132,9 +129,13 @@ body {
   padding:8px;
   border:1px solid rgba(255,255,255,0.03);
   min-height: 140px;
-  background: linear-gradient(180deg, rgba(0,0,0,0.12), rgba(0,0,0,0.06));
+
+  /* NUEVO FONDO VERDE FUTBOLERO */
+  background: #0a3d0a; /* verde oscuro estilo campo de juego */
 }
+
 .group h4 { margin-bottom:8px; color:#ffd54f; text-align:center; }
+
 .slot {
   display:flex;
   justify-content:space-between;
@@ -143,7 +144,7 @@ body {
   margin:6px 0;
   padding:6px 8px;
   border-radius:6px;
-  background: rgba(255,255,255,0.02);
+  background: rgba(255,255,255,0.08);
   font-weight:700;
 }
 .slot .origin {
@@ -153,7 +154,7 @@ body {
   color:#dfefff;
 }
 
-/* estilos para origin con confederacion (solo background) */
+/* confederaciones */
 .origin.conf-UEFA { background:#0d3b66; }
 .origin.conf-CONMEBOL { background:#3b7a57; }
 .origin.conf-AFC { background:#7a4b9a; }
@@ -162,10 +163,8 @@ body {
 .origin.conf-OFC { background:#2b5b7a; }
 .slot.host { background:#2b7a36; color:white; }
 
-/* banderita al lado del nombre en el slot */
 .slot .flag { font-size:18px; margin-right:8px; }
 
-/* responsive */
 @media (max-width: 980px) {
   .container { flex-direction: column; padding:12px; }
   .left, .right { width:100%; }
